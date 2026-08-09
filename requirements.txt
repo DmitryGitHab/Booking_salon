@@ -1,0 +1,28 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0
+
+# DB
+sqlalchemy==2.0.35
+alembic==1.13.2
+aiosqlite==0.20.0          # тесты / локальная разработка
+asyncpg==0.29.0            # прод / докер (PostgreSQL)
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1               # passlib 1.7.4 несовместим с bcrypt>=4.1 (ValueError про 72 байта на ЛЮБОМ пароле)
+
+# Payments
+stripe==10.11.0
+
+# Background jobs (появятся на этапе 4)
+celery==5.4.0
+redis==5.0.8
+
+# Tests
+pytest==8.3.3
+pytest-asyncio==0.24.0
+httpx==0.27.2
