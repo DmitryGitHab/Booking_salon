@@ -33,3 +33,18 @@ class NotFoundError(DomainError):
 
 class PermissionDeniedError(DomainError):
     pass
+
+
+class BookingConflictError(DomainError):
+    """Слот забронировали параллельно — сработал constraint/лок на уровне инфраструктуры."""
+
+    def __init__(self, message: str = "Слот только что был забронирован другим клиентом"):
+        super().__init__(message)
+
+
+class InvalidStateTransitionError(DomainError):
+    """Попытка недопустимого перехода статуса (например, отменить уже отменённую бронь)."""
+
+
+class InvalidBookingRequestError(DomainError):
+    """Запрос на бронирование логически некорректен (например, услуга не принадлежит мастеру слота)."""

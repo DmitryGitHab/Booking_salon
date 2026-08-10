@@ -12,6 +12,7 @@ from uuid import UUID
 
 from app.domain.enums import BookingStatus, SlotStatus
 from app.domain.exceptions import (
+    InvalidStateTransitionError,
     SlotAlreadyTakenError,
     SlotTooShortForServiceError,
     SlotInThePastError,
@@ -71,10 +72,11 @@ class Booking:
     price_at_booking: Decimal
     status: BookingStatus = BookingStatus.PENDING_PAYMENT
     created_at: datetime = field(default_factory=datetime.utcnow)
+    expires_at: datetime | None = None
 
     def confirm(self) -> None:
         if self.status != BookingStatus.PENDING_PAYMENT:
-            raise ValueError(f"Нельзя подтвердить бронь в статусе {self.status}")
+            raise InvalidStateTransitionError(f"Нельзя подтвердить бронь в статусе {self.status}")
         self.status = BookingStatus.CONFIRMED
 
     def expire(self) -> None:
@@ -84,5 +86,5 @@ class Booking:
 
     def cancel(self) -> None:
         if self.status not in (BookingStatus.CONFIRMED, BookingStatus.PENDING_PAYMENT):
-            raise ValueError(f"Нельзя отменить бронь в статусе {self.status}")
+            raise InvalidStateTransitionError(f"Нельзя отменить бронь в статусе {self.status}")
         self.status = BookingStatus.CANCELLED

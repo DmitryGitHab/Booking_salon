@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./booking.db"
 
+    # Redis (нужен только для booking_lock_strategy=redis)
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Защита от двойного бронирования: "db" — только уникальный constraint + FOR UPDATE,
+    # "redis" — дополнительно распределённый лок на ключ слота перед транзакцией.
+    booking_lock_strategy: str = "db"
+
     # JWT
     jwt_secret: str = "CHANGE_ME_IN_PRODUCTION"
     jwt_algorithm: str = "HS256"

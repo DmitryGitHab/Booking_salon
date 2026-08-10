@@ -6,6 +6,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.domain.enums import UserRole
 from app.infrastructure.db.base import get_db_session
@@ -55,3 +56,28 @@ def require_roles(*allowed_roles: UserRole):
         return user
 
     return checker
+
+
+# ---------------------------------------------------------------------------
+# Фабрики use case-ов (application-слой). Собирают use case из конкретных
+# инфраструктурных реализаций — единственное место, где это "склеивается".
+# ---------------------------------------------------------------------------
+
+def get_create_booking_use_case():
+    from app.application.booking import CreateBookingUseCase
+    from app.infrastructure.locks.factory import get_lock
+    from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
+
+    settings = get_settings()
+    return CreateBookingUseCase(
+        uow_factory=sqlalchemy_uow_factory,
+        lock=get_lock(),
+        unpaid_ttl_minutes=settings.unpaid_booking_ttl_minutes,
+    )
+
+
+def get_cancel_booking_use_case():
+    from app.application.booking import CancelBookingUseCase
+    from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
+
+    return CancelBookingUseCase(uow_factory=sqlalchemy_uow_factory)
