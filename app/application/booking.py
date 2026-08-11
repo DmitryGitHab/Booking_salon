@@ -4,9 +4,9 @@ from datetime import datetime, timedelta
 from typing import Callable
 from uuid import UUID, uuid4
 
-from app.application.interfaces import DistributedLock, UnitOfWork
+from app.application.interfaces import DistributedLock, PaymentGateway, UnitOfWork
 from app.domain.entities import Booking
-from app.domain.enums import BookingStatus
+from app.domain.enums import BookingStatus, PaymentStatus
 from app.domain.exceptions import (
     InvalidBookingRequestError,
     NotFoundError,
@@ -80,12 +80,14 @@ class CreateBookingUseCase:
 
 class CancelBookingUseCase:
     """
-    Отмена брони клиентом. Возврат денег (Stripe refund) подключим на этапе 3 —
-    здесь только доменный переход статуса и освобождение слота.
+    Отмена брони клиентом. Если бронь была оплачена (status == CONFIRMED),
+    оформляет 100%-й возврат через Stripe. Сетевой вызов возврата, как и в
+    InitiatePaymentUseCase, вынесен из транзакции БД.
     """
 
-    def __init__(self, uow_factory: Callable[[], UnitOfWork]):
+    def __init__(self, uow_factory: Callable[[], UnitOfWork], payment_gateway: PaymentGateway):
         self._uow_factory = uow_factory
+        self._payment_gateway = payment_gateway
 
     async def execute(self, *, booking_id: UUID, requesting_user_id: UUID) -> Booking:
         async with self._uow_factory() as uow:
@@ -95,6 +97,7 @@ class CancelBookingUseCase:
             if booking.client_id != requesting_user_id:
                 raise PermissionDeniedError("Нельзя отменить чужую бронь")
 
+            was_paid = booking.status == BookingStatus.CONFIRMED
             booking.cancel()  # бросает InvalidStateTransitionError на неверный статус
 
             slot = await uow.slots.get_by_id(booking.slot_id)
@@ -102,7 +105,16 @@ class CancelBookingUseCase:
                 slot.release()
                 await uow.slots.save(slot)
 
+            payment = await uow.payments.get_by_booking_id(booking.id) if was_paid else None
+
             await uow.bookings.update_status(booking.id, booking.status)
             await uow.commit()
 
-            return booking
+        if was_paid and payment is not None and payment.status == PaymentStatus.SUCCEEDED:
+            await self._payment_gateway.refund(payment_intent_id=payment.stripe_payment_intent_id)
+            async with self._uow_factory() as uow:
+                payment.mark_refunded()
+                await uow.payments.update(payment)
+                await uow.commit()
+
+        return booking

@@ -4,9 +4,18 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession, get_cancel_booking_use_case, get_create_booking_use_case, require_roles
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    get_cancel_booking_use_case,
+    get_create_booking_use_case,
+    get_initiate_payment_use_case,
+    require_roles,
+)
 from app.api.schemas.booking import BookingCreateRequest, BookingResponse
+from app.api.schemas.payment import PaymentInitiateResponse
 from app.application.booking import CancelBookingUseCase, CreateBookingUseCase
+from app.application.payment import InitiatePaymentUseCase
 from app.domain.enums import UserRole
 from app.infrastructure.db.models import Booking as BookingModel
 
@@ -25,6 +34,21 @@ async def create_booking(
         service_id=payload.service_id,
     )
     return BookingResponse.from_domain(booking)
+
+
+@router.post("/{booking_id}/pay", response_model=PaymentInitiateResponse)
+async def pay_for_booking(
+    booking_id: UUID,
+    current_user: CurrentUser,
+    use_case: Annotated[InitiatePaymentUseCase, Depends(get_initiate_payment_use_case)],
+):
+    """
+    Создаёт Stripe PaymentIntent и возвращает client_secret — дальше фронтенд
+    подтверждает оплату через Stripe.js/Stripe Elements (появится на этапе 5).
+    Повторный вызов для той же брони пересоздаёт intent — так работает retry.
+    """
+    result = await use_case.execute(booking_id=booking_id, requesting_user_id=current_user.id)
+    return PaymentInitiateResponse(payment_intent_id=result.intent_id, client_secret=result.client_secret)
 
 
 @router.post("/{booking_id}/cancel", response_model=BookingResponse)

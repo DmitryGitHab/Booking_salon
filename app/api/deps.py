@@ -2,7 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,25 +12,28 @@ from app.domain.enums import UserRole
 from app.infrastructure.db.base import get_db_session
 from app.infrastructure.db.models import User
 
-# tokenUrl используется только для генерации Swagger-формы логина
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+# HTTPBearer (не OAuth2PasswordBearer!) — потому что наш /api/auth/login принимает JSON
+# {"email": ..., "password": ...}, а не стандартную OAuth2 form-data с полем "username".
+# С HTTPBearer кнопка Authorize в Swagger показывает одно простое поле "Value" для вставки
+# access_token, без формы логина, которая всё равно не подошла бы под нашу JSON-схему.
+bearer_scheme = HTTPBearer(auto_error=False)
 
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 
 
 async def get_current_user(
     db: DbSession,
-    token: Annotated[str | None, Depends(oauth2_scheme)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> User:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Не удалось подтвердить учётные данные",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    if token is None:
+    if credentials is None:
         raise credentials_error
 
-    payload = decode_access_token(token)
+    payload = decode_access_token(credentials.credentials)
     if payload is None:
         raise credentials_error
 
@@ -63,6 +66,12 @@ def require_roles(*allowed_roles: UserRole):
 # инфраструктурных реализаций — единственное место, где это "склеивается".
 # ---------------------------------------------------------------------------
 
+def get_payment_gateway():
+    from app.infrastructure.payments.stripe_gateway import StripeGateway
+
+    return StripeGateway()
+
+
 def get_create_booking_use_case():
     from app.application.booking import CreateBookingUseCase
     from app.infrastructure.locks.factory import get_lock
@@ -76,8 +85,49 @@ def get_create_booking_use_case():
     )
 
 
-def get_cancel_booking_use_case():
+def get_cancel_booking_use_case(payment_gateway=Depends(get_payment_gateway)):
     from app.application.booking import CancelBookingUseCase
     from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
 
-    return CancelBookingUseCase(uow_factory=sqlalchemy_uow_factory)
+    return CancelBookingUseCase(uow_factory=sqlalchemy_uow_factory, payment_gateway=payment_gateway)
+
+
+def get_initiate_payment_use_case(payment_gateway=Depends(get_payment_gateway)):
+    from app.application.payment import InitiatePaymentUseCase
+    from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
+
+    settings = get_settings()
+    return InitiatePaymentUseCase(
+        uow_factory=sqlalchemy_uow_factory,
+        payment_gateway=payment_gateway,
+        max_attempts=settings.payment_retry_attempts,
+        currency=settings.stripe_currency,
+    )
+
+
+def get_handle_payment_webhook_use_case():
+    from app.application.payment import HandlePaymentWebhookUseCase
+    from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
+
+    settings = get_settings()
+    return HandlePaymentWebhookUseCase(
+        uow_factory=sqlalchemy_uow_factory,
+        max_attempts=settings.payment_retry_attempts,
+    )
+
+
+def get_stripe_webhook_verifier():
+    """
+    Возвращает функцию проверки подписи Stripe-запроса.
+    Вынесено в зависимость специально, чтобы в тестах (где ключи dummy и
+    настоящую подпись Stripe не проверить) можно было подменить на заглушку
+    через app.dependency_overrides.
+    """
+    from app.infrastructure.payments.stripe_gateway import StripeGateway
+
+    settings = get_settings()
+
+    def verify(payload: bytes, sig_header: str):
+        return StripeGateway.verify_webhook_signature(payload, sig_header, settings.stripe_webhook_secret)
+
+    return verify

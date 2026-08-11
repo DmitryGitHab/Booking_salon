@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from app.domain.enums import BookingStatus, SlotStatus
+from app.domain.enums import BookingStatus, PaymentStatus, SlotStatus
 from app.domain.exceptions import (
     InvalidStateTransitionError,
     SlotAlreadyTakenError,
@@ -88,3 +88,32 @@ class Booking:
         if self.status not in (BookingStatus.CONFIRMED, BookingStatus.PENDING_PAYMENT):
             raise InvalidStateTransitionError(f"Нельзя отменить бронь в статусе {self.status}")
         self.status = BookingStatus.CANCELLED
+
+
+@dataclass
+class Payment:
+    id: UUID
+    booking_id: UUID
+    amount: Decimal
+    status: PaymentStatus = PaymentStatus.PENDING
+    stripe_payment_intent_id: str | None = None
+    attempt_count: int = 0
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+    def register_attempt(self, intent_id: str) -> None:
+        """Фиксирует новую попытку оплаты (новый PaymentIntent)."""
+        self.attempt_count += 1
+        self.stripe_payment_intent_id = intent_id
+        self.status = PaymentStatus.PENDING
+
+    def mark_succeeded(self) -> None:
+        self.status = PaymentStatus.SUCCEEDED
+
+    def mark_failed(self) -> None:
+        self.status = PaymentStatus.FAILED
+
+    def mark_refunded(self) -> None:
+        self.status = PaymentStatus.REFUNDED
+
+    def has_exceeded_retry_limit(self, max_attempts: int) -> bool:
+        return self.attempt_count >= max_attempts

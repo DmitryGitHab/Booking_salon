@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Stripe (test mode)
     stripe_secret_key: str = "sk_test_dummy"
     stripe_webhook_secret: str = "whsec_dummy"
+    stripe_currency: str = "usd"
 
     # Booking rules
     unpaid_booking_ttl_minutes: int = 15  # автоотмена неоплаченной брони

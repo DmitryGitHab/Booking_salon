@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import auth, bookings, masters
+from app.api.routes import auth, bookings, masters, webhooks
 from app.core.config import get_settings
 from app.domain.exceptions import (
     BookingConflictError,
@@ -11,6 +11,7 @@ from app.domain.exceptions import (
     InvalidBookingRequestError,
     InvalidStateTransitionError,
     NotFoundError,
+    PaymentAttemptsExceededError,
     PermissionDeniedError,
     SlotAlreadyTakenError,
     SlotInThePastError,
@@ -31,6 +32,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(masters.router)
 app.include_router(bookings.router)
+app.include_router(webhooks.router)
 
 # Отдаём простой vanilla-JS фронтенд из /static (появится на следующем этапе)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -66,6 +68,7 @@ app.add_exception_handler(SlotInThePastError, _bad_request_handler)
 app.add_exception_handler(SlotTooShortForServiceError, _bad_request_handler)
 app.add_exception_handler(InvalidBookingRequestError, _bad_request_handler)
 app.add_exception_handler(InvalidStateTransitionError, _bad_request_handler)
+app.add_exception_handler(PaymentAttemptsExceededError, _bad_request_handler)
 app.add_exception_handler(DomainError, _bad_request_handler)  # catch-all на случай новых DomainError
 
 

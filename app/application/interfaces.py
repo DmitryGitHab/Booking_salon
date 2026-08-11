@@ -7,10 +7,12 @@ Use case-ы зависят только от этих Protocol-ов, а не о�
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from app.domain.entities import Booking, Service, Slot
+from app.domain.entities import Booking, Payment, Service, Slot
 from app.domain.enums import BookingStatus, SlotStatus
 
 
@@ -32,6 +34,13 @@ class BookingRepository(Protocol):
     async def update_status(self, booking_id: UUID, status: BookingStatus) -> None: ...
 
 
+class PaymentRepository(Protocol):
+    async def add(self, payment: Payment) -> None: ...
+    async def update(self, payment: Payment) -> None: ...
+    async def get_by_booking_id(self, booking_id: UUID) -> Payment | None: ...
+    async def get_by_intent_id(self, intent_id: str) -> Payment | None: ...
+
+
 class UnitOfWork(Protocol):
     """
     Группирует репозитории в рамках одной транзакции БД.
@@ -46,6 +55,7 @@ class UnitOfWork(Protocol):
     slots: SlotRepository
     services: ServiceRepository
     bookings: BookingRepository
+    payments: PaymentRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
     async def __aexit__(self, exc_type, exc, tb) -> None: ...
@@ -59,3 +69,22 @@ class DistributedLock(Protocol):
     def __call__(self, key: str) -> "DistributedLock": ...
     async def __aenter__(self) -> None: ...
     async def __aexit__(self, exc_type, exc, tb) -> None: ...
+
+
+@dataclass
+class PaymentIntentResult:
+    """DTO, пересекающий границу порта PaymentGateway — не доменная сущность,
+    а данные, специфичные для платёжного провайдера (id намерения, client_secret)."""
+
+    intent_id: str
+    client_secret: str
+
+
+class PaymentGateway(Protocol):
+    """Абстракция над платёжным провайдером (в нашем случае — Stripe)."""
+
+    async def create_payment_intent(
+        self, *, amount: Decimal, currency: str, metadata: dict
+    ) -> PaymentIntentResult: ...
+
+    async def refund(self, *, payment_intent_id: str) -> None: ...

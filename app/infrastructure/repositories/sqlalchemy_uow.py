@@ -4,16 +4,19 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.entities import Booking, Service, Slot
+from app.domain.entities import Booking, Payment, Service, Slot
 from app.domain.enums import BookingStatus
 from app.domain.exceptions import BookingConflictError
 from app.infrastructure.db.base import async_session_maker
 from app.infrastructure.db.models import Booking as BookingModel
+from app.infrastructure.db.models import Payment as PaymentModel
 from app.infrastructure.db.models import Service as ServiceModel
 from app.infrastructure.db.models import Slot as SlotModel
 from app.infrastructure.repositories.mappers import (
     booking_to_domain,
     booking_to_orm,
+    payment_to_domain,
+    payment_to_orm,
     service_to_domain,
     slot_to_domain,
 )
@@ -78,6 +81,37 @@ class SqlAlchemyBookingRepository:
         )
 
 
+class SqlAlchemyPaymentRepository:
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def add(self, payment: Payment) -> None:
+        self._session.add(payment_to_orm(payment))
+
+    async def update(self, payment: Payment) -> None:
+        await self._session.execute(
+            update(PaymentModel)
+            .where(PaymentModel.id == payment.id)
+            .values(
+                status=payment.status,
+                stripe_payment_intent_id=payment.stripe_payment_intent_id,
+                attempt_count=payment.attempt_count,
+            )
+        )
+
+    async def get_by_booking_id(self, booking_id: UUID) -> Payment | None:
+        result = await self._session.execute(select(PaymentModel).where(PaymentModel.booking_id == booking_id))
+        orm = result.scalar_one_or_none()
+        return payment_to_domain(orm) if orm else None
+
+    async def get_by_intent_id(self, intent_id: str) -> Payment | None:
+        result = await self._session.execute(
+            select(PaymentModel).where(PaymentModel.stripe_payment_intent_id == intent_id)
+        )
+        orm = result.scalar_one_or_none()
+        return payment_to_domain(orm) if orm else None
+
+
 class SqlAlchemyUnitOfWork:
     """
     Одна единица работы = одна транзакция БД = одна AsyncSession.
@@ -97,6 +131,7 @@ class SqlAlchemyUnitOfWork:
         self.slots = SqlAlchemySlotRepository(self._session)
         self.services = SqlAlchemyServiceRepository(self._session)
         self.bookings = SqlAlchemyBookingRepository(self._session)
+        self.payments = SqlAlchemyPaymentRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:

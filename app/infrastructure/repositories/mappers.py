@@ -3,9 +3,11 @@
 Единственное место, где инфраструктурный и доменный слой "встречаются" напрямую.
 """
 from app.domain.entities import Booking as DomainBooking
+from app.domain.entities import Payment as DomainPayment
 from app.domain.entities import Service as DomainService
 from app.domain.entities import Slot as DomainSlot
 from app.infrastructure.db.models import Booking as BookingModel
+from app.infrastructure.db.models import Payment as PaymentModel
 from app.infrastructure.db.models import Service as ServiceModel
 from app.infrastructure.db.models import Slot as SlotModel
 
@@ -54,4 +56,28 @@ def booking_to_orm(domain: DomainBooking) -> BookingModel:
         status=domain.status,
         created_at=domain.created_at,
         expires_at=domain.expires_at,
+    )
+
+
+def payment_to_domain(orm: PaymentModel) -> DomainPayment:
+    return DomainPayment(
+        id=orm.id,
+        booking_id=orm.booking_id,
+        amount=orm.amount,
+        status=orm.status,
+        stripe_payment_intent_id=orm.stripe_payment_intent_id,
+        attempt_count=orm.attempt_count,
+        created_at=orm.created_at,
+    )
+
+
+def payment_to_orm(domain: DomainPayment) -> PaymentModel:
+    return PaymentModel(
+        id=domain.id,
+        booking_id=domain.booking_id,
+        amount=domain.amount,
+        status=domain.status,
+        stripe_payment_intent_id=domain.stripe_payment_intent_id,
+        attempt_count=domain.attempt_count,
+        created_at=domain.created_at,
     )

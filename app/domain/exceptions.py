@@ -48,3 +48,10 @@ class InvalidStateTransitionError(DomainError):
 
 class InvalidBookingRequestError(DomainError):
     """Запрос на бронирование логически некорректен (например, услуга не принадлежит мастеру слота)."""
+
+
+class PaymentAttemptsExceededError(DomainError):
+    """Клиент исчерпал лимит попыток оплаты — бронь автоматически аннулирована."""
+
+    def __init__(self, message: str = "Превышено количество попыток оплаты, бронь аннулирована"):
+        super().__init__(message)
