@@ -1,25 +1,27 @@
 """
 Порты (интерфейсы) application-слоя.
 
-Use case-ы зависят только от этих Protocol-ов, а не от SQLAlchemy напрямую.
-Конкретные реализации — в infrastructure/repositories/sqlalchemy_uow.py.
-Это позволяет тестировать use case-ы с in-memory фейками, вообще без БД.
+Use case-ы зависят только от этих Protocol-ов, а не от SQLAlchemy/Stripe/Celery напрямую.
+Конкретные реализации — в infrastructure/. Это позволяет тестировать use case-ы
+с in-memory/fake реализациями, вообще без БД, внешних API и брокера очередей.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
 from app.domain.entities import Booking, Payment, Service, Slot
-from app.domain.enums import BookingStatus, SlotStatus
+from app.domain.enums import BookingStatus
 
 
 class SlotRepository(Protocol):
     async def get_by_id(self, slot_id: UUID) -> Slot | None: ...
-    async def save(self, slot: Slot) -> None: ...
-    """Сохраняет изменения статуса слота (UPDATE)."""
+    async def save(self, slot: Slot) -> None:
+        """Сохраняет изменения статуса слота (UPDATE)."""
+        ...
 
 
 class ServiceRepository(Protocol):
@@ -32,6 +34,9 @@ class BookingRepository(Protocol):
     async def list_by_client(self, client_id: UUID) -> list[Booking]: ...
     async def get_by_id(self, booking_id: UUID) -> Booking | None: ...
     async def update_status(self, booking_id: UUID, status: BookingStatus) -> None: ...
+    async def list_stale_pending(self, now: datetime) -> list[Booking]:
+        """Брони в статусе PENDING_PAYMENT с истёкшим expires_at — кандидаты на автоотмену."""
+        ...
 
 
 class PaymentRepository(Protocol):
@@ -39,6 +44,20 @@ class PaymentRepository(Protocol):
     async def update(self, payment: Payment) -> None: ...
     async def get_by_booking_id(self, booking_id: UUID) -> Payment | None: ...
     async def get_by_intent_id(self, intent_id: str) -> Payment | None: ...
+
+
+@dataclass
+class ClientContact:
+    """DTO с минимумом данных клиента, нужным для отправки уведомления."""
+
+    id: UUID
+    email: str
+    phone: str | None
+    full_name: str
+
+
+class UserRepository(Protocol):
+    async def get_contact(self, user_id: UUID) -> ClientContact | None: ...
 
 
 class UnitOfWork(Protocol):
@@ -56,6 +75,7 @@ class UnitOfWork(Protocol):
     services: ServiceRepository
     bookings: BookingRepository
     payments: PaymentRepository
+    users: UserRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
     async def __aexit__(self, exc_type, exc, tb) -> None: ...
@@ -88,3 +108,14 @@ class PaymentGateway(Protocol):
     ) -> PaymentIntentResult: ...
 
     async def refund(self, *, payment_intent_id: str) -> None: ...
+
+
+class NotificationDispatcher(Protocol):
+    """
+    Ставит уведомление в очередь фоновых задач (Celery) — не отправляет само,
+    только публикует сообщение в брокер и сразу возвращает управление. Поэтому
+    метод синхронный: сетевого ожидания здесь нет, только паблиш в Redis.
+    Реальная отправка (сейчас — лог + SMS-заглушка) происходит в Celery-воркере.
+    """
+
+    def dispatch_sms(self, *, phone: str | None, message: str) -> None: ...

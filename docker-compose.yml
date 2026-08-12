@@ -29,6 +29,7 @@ services:
         condition: service_started
     environment:
       DATABASE_URL: postgresql+asyncpg://booking:booking@db:5432/booking
+      REDIS_URL: redis://redis:6379/0
       JWT_SECRET: dev-secret-change-me
     ports:
       - "8000:8000"
@@ -37,6 +38,36 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  worker:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://booking:booking@db:5432/booking
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: dev-secret-change-me
+    volumes:
+      - .:/app
+    command: celery -A app.workers.celery_app worker --loglevel=info
+
+  beat:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://booking:booking@db:5432/booking
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: dev-secret-change-me
+    volumes:
+      - .:/app
+    command: celery -A app.workers.celery_app beat --loglevel=info
 
 volumes:
   db_data:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 from uuid import UUID, uuid4
 
-from app.application.interfaces import PaymentGateway, PaymentIntentResult, UnitOfWork
+from app.application.interfaces import NotificationDispatcher, PaymentGateway, PaymentIntentResult, UnitOfWork
 from app.domain.entities import Payment
 from app.domain.enums import BookingStatus, PaymentStatus
 from app.domain.exceptions import (
@@ -85,9 +85,15 @@ class HandlePaymentWebhookUseCase:
     Подпись запроса проверяется на уровне API-роута — сюда попадает уже доверенное событие.
     """
 
-    def __init__(self, uow_factory: Callable[[], UnitOfWork], max_attempts: int):
+    def __init__(
+        self,
+        uow_factory: Callable[[], UnitOfWork],
+        max_attempts: int,
+        notification_dispatcher: NotificationDispatcher,
+    ):
         self._uow_factory = uow_factory
         self._max_attempts = max_attempts
+        self._notification_dispatcher = notification_dispatcher
 
     async def handle_succeeded(self, intent_id: str) -> None:
         async with self._uow_factory() as uow:
@@ -105,6 +111,14 @@ class HandlePaymentWebhookUseCase:
 
             await uow.commit()
 
+            contact = await uow.users.get_contact(booking.client_id) if booking is not None else None
+
+        if booking is not None:
+            self._notification_dispatcher.dispatch_sms(
+                phone=contact.phone if contact else None,
+                message="Оплата прошла успешно, бронь подтверждена.",
+            )
+
     async def handle_failed(self, intent_id: str) -> None:
         async with self._uow_factory() as uow:
             payment = await uow.payments.get_by_intent_id(intent_id)
@@ -115,6 +129,7 @@ class HandlePaymentWebhookUseCase:
             await uow.payments.update(payment)
 
             booking = await uow.bookings.get_by_id(payment.booking_id)
+            auto_expired = False
             if (
                 booking is not None
                 and booking.status == BookingStatus.PENDING_PAYMENT
@@ -122,6 +137,7 @@ class HandlePaymentWebhookUseCase:
             ):
                 # Лимит попыток исчерпан — бронь автоматически аннулируется, слот освобождается.
                 booking.expire()
+                auto_expired = True
                 await uow.bookings.update_status(booking.id, booking.status)
 
                 slot = await uow.slots.get_by_id(booking.slot_id)
@@ -130,3 +146,11 @@ class HandlePaymentWebhookUseCase:
                     await uow.slots.save(slot)
 
             await uow.commit()
+
+            contact = await uow.users.get_contact(booking.client_id) if booking is not None else None
+
+        if auto_expired:
+            self._notification_dispatcher.dispatch_sms(
+                phone=contact.phone if contact else None,
+                message="Превышено число попыток оплаты — бронь автоматически отменена.",
+            )

@@ -1,9 +1,11 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.interfaces import ClientContact
 from app.domain.entities import Booking, Payment, Service, Slot
 from app.domain.enums import BookingStatus
 from app.domain.exceptions import BookingConflictError
@@ -12,6 +14,7 @@ from app.infrastructure.db.models import Booking as BookingModel
 from app.infrastructure.db.models import Payment as PaymentModel
 from app.infrastructure.db.models import Service as ServiceModel
 from app.infrastructure.db.models import Slot as SlotModel
+from app.infrastructure.db.models import User as UserModel
 from app.infrastructure.repositories.mappers import (
     booking_to_domain,
     booking_to_orm,
@@ -80,6 +83,16 @@ class SqlAlchemyBookingRepository:
             update(BookingModel).where(BookingModel.id == booking_id).values(status=status)
         )
 
+    async def list_stale_pending(self, now: datetime) -> list[Booking]:
+        result = await self._session.execute(
+            select(BookingModel).where(
+                BookingModel.status == BookingStatus.PENDING_PAYMENT,
+                BookingModel.expires_at.is_not(None),
+                BookingModel.expires_at < now,
+            )
+        )
+        return [booking_to_domain(orm) for orm in result.scalars().all()]
+
 
 class SqlAlchemyPaymentRepository:
     def __init__(self, session: AsyncSession):
@@ -112,6 +125,18 @@ class SqlAlchemyPaymentRepository:
         return payment_to_domain(orm) if orm else None
 
 
+class SqlAlchemyUserRepository:
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def get_contact(self, user_id: UUID) -> ClientContact | None:
+        result = await self._session.execute(select(UserModel).where(UserModel.id == user_id))
+        orm = result.scalar_one_or_none()
+        if orm is None:
+            return None
+        return ClientContact(id=orm.id, email=orm.email, phone=orm.phone, full_name=orm.full_name)
+
+
 class SqlAlchemyUnitOfWork:
     """
     Одна единица работы = одна транзакция БД = одна AsyncSession.
@@ -132,6 +157,7 @@ class SqlAlchemyUnitOfWork:
         self.services = SqlAlchemyServiceRepository(self._session)
         self.bookings = SqlAlchemyBookingRepository(self._session)
         self.payments = SqlAlchemyPaymentRepository(self._session)
+        self.users = SqlAlchemyUserRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:

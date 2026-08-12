@@ -5,11 +5,27 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.api.deps import get_notification_dispatcher
 from app.infrastructure.db import models  # noqa: F401 — регистрирует модели в metadata
 from app.infrastructure.db.base import Base, get_db_session
 from app.main import app
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+
+class FakeNotificationDispatcher:
+    """
+    Подменяет CeleryNotificationDispatcher в тестах: реальный полез бы в Redis
+    (которого в тестовом окружении нет) через send_sms_task.delay(). Здесь просто
+    копим (phone, message) в списке — при желании тест может проверить отправленные
+    уведомления через client.app.dependency_overrides[get_notification_dispatcher].
+    """
+
+    def __init__(self):
+        self.sent: list[tuple[str | None, str]] = []
+
+    def dispatch_sms(self, *, phone, message):
+        self.sent.append((phone, message))
 
 
 @pytest_asyncio.fixture
@@ -53,6 +69,11 @@ async def client(
         "app.infrastructure.repositories.sqlalchemy_uow.async_session_maker",
         test_session_maker,
     )
+
+    # Use case-ы шлют уведомления через NotificationDispatcher.dispatch_sms(), а
+    # реальная реализация (CeleryNotificationDispatcher) полезла бы в Redis. Подменяем
+    # на fake по умолчанию для всех тестов — Redis в тестовом окружении не поднят.
+    app.dependency_overrides[get_notification_dispatcher] = FakeNotificationDispatcher
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 from uuid import UUID, uuid4
 
-from app.application.interfaces import DistributedLock, PaymentGateway, UnitOfWork
+from app.application.interfaces import DistributedLock, NotificationDispatcher, PaymentGateway, UnitOfWork
 from app.domain.entities import Booking
 from app.domain.enums import BookingStatus, PaymentStatus
 from app.domain.exceptions import (
@@ -35,10 +35,12 @@ class CreateBookingUseCase:
         uow_factory: Callable[[], UnitOfWork],
         lock: DistributedLock,
         unpaid_ttl_minutes: int,
+        notification_dispatcher: NotificationDispatcher,
     ):
         self._uow_factory = uow_factory
         self._lock = lock
         self._unpaid_ttl_minutes = unpaid_ttl_minutes
+        self._notification_dispatcher = notification_dispatcher
 
     async def execute(self, *, client_id: UUID, slot_id: UUID, service_id: UUID) -> Booking:
         lock_key = f"booking-lock:slot:{slot_id}"
@@ -75,7 +77,16 @@ class CreateBookingUseCase:
                 await uow.bookings.add(booking)
                 await uow.commit()  # может бросить BookingConflictError при гонке
 
-                return booking
+                contact = await uow.users.get_contact(client_id)
+
+        self._notification_dispatcher.dispatch_sms(
+            phone=contact.phone if contact else None,
+            message=(
+                f"Бронь на {service.name} создана. У вас {self._unpaid_ttl_minutes} мин. на оплату, "
+                f"иначе бронь будет автоматически отменена."
+            ),
+        )
+        return booking
 
 
 class CancelBookingUseCase:
@@ -85,9 +96,15 @@ class CancelBookingUseCase:
     InitiatePaymentUseCase, вынесен из транзакции БД.
     """
 
-    def __init__(self, uow_factory: Callable[[], UnitOfWork], payment_gateway: PaymentGateway):
+    def __init__(
+        self,
+        uow_factory: Callable[[], UnitOfWork],
+        payment_gateway: PaymentGateway,
+        notification_dispatcher: NotificationDispatcher,
+    ):
         self._uow_factory = uow_factory
         self._payment_gateway = payment_gateway
+        self._notification_dispatcher = notification_dispatcher
 
     async def execute(self, *, booking_id: UUID, requesting_user_id: UUID) -> Booking:
         async with self._uow_factory() as uow:
@@ -110,11 +127,20 @@ class CancelBookingUseCase:
             await uow.bookings.update_status(booking.id, booking.status)
             await uow.commit()
 
+            contact = await uow.users.get_contact(requesting_user_id)
+
+        refund_issued = False
         if was_paid and payment is not None and payment.status == PaymentStatus.SUCCEEDED:
             await self._payment_gateway.refund(payment_intent_id=payment.stripe_payment_intent_id)
+            refund_issued = True
             async with self._uow_factory() as uow:
                 payment.mark_refunded()
                 await uow.payments.update(payment)
                 await uow.commit()
+
+        message = "Бронь отменена."
+        if refund_issued:
+            message += " Оплата возвращена в полном объёме."
+        self._notification_dispatcher.dispatch_sms(phone=contact.phone if contact else None, message=message)
 
         return booking

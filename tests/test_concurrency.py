@@ -123,10 +123,19 @@ async def _seed_clients(session_maker, count: int) -> list:
 
 async def _run_concurrent_bookings(session_maker, lock, slot_id, service_id, client_ids):
     """Запускает N параллельных попыток забронировать один и тот же слот."""
+
+    class _NoOpNotificationDispatcher:
+        """В этом тесте реальные уведомления не нужны — CeleryNotificationDispatcher
+        полез бы в Redis по адресу из настроек приложения, а не в testcontainers-Redis."""
+
+        def dispatch_sms(self, *, phone, message):
+            pass
+
     use_case = CreateBookingUseCase(
         uow_factory=functools.partial(sqlalchemy_uow_factory, session_maker=session_maker),
         lock=lock,
         unpaid_ttl_minutes=15,
+        notification_dispatcher=_NoOpNotificationDispatcher(),
     )
 
     async def attempt(client_id):

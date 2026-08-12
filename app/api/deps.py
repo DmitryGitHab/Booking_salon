@@ -72,7 +72,13 @@ def get_payment_gateway():
     return StripeGateway()
 
 
-def get_create_booking_use_case():
+def get_notification_dispatcher():
+    from app.infrastructure.notifications.celery_dispatcher import CeleryNotificationDispatcher
+
+    return CeleryNotificationDispatcher()
+
+
+def get_create_booking_use_case(notification_dispatcher=Depends(get_notification_dispatcher)):
     from app.application.booking import CreateBookingUseCase
     from app.infrastructure.locks.factory import get_lock
     from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
@@ -82,14 +88,22 @@ def get_create_booking_use_case():
         uow_factory=sqlalchemy_uow_factory,
         lock=get_lock(),
         unpaid_ttl_minutes=settings.unpaid_booking_ttl_minutes,
+        notification_dispatcher=notification_dispatcher,
     )
 
 
-def get_cancel_booking_use_case(payment_gateway=Depends(get_payment_gateway)):
+def get_cancel_booking_use_case(
+    payment_gateway=Depends(get_payment_gateway),
+    notification_dispatcher=Depends(get_notification_dispatcher),
+):
     from app.application.booking import CancelBookingUseCase
     from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
 
-    return CancelBookingUseCase(uow_factory=sqlalchemy_uow_factory, payment_gateway=payment_gateway)
+    return CancelBookingUseCase(
+        uow_factory=sqlalchemy_uow_factory,
+        payment_gateway=payment_gateway,
+        notification_dispatcher=notification_dispatcher,
+    )
 
 
 def get_initiate_payment_use_case(payment_gateway=Depends(get_payment_gateway)):
@@ -105,7 +119,7 @@ def get_initiate_payment_use_case(payment_gateway=Depends(get_payment_gateway)):
     )
 
 
-def get_handle_payment_webhook_use_case():
+def get_handle_payment_webhook_use_case(notification_dispatcher=Depends(get_notification_dispatcher)):
     from app.application.payment import HandlePaymentWebhookUseCase
     from app.infrastructure.repositories.sqlalchemy_uow import sqlalchemy_uow_factory
 
@@ -113,6 +127,7 @@ def get_handle_payment_webhook_use_case():
     return HandlePaymentWebhookUseCase(
         uow_factory=sqlalchemy_uow_factory,
         max_attempts=settings.payment_retry_attempts,
+        notification_dispatcher=notification_dispatcher,
     )
 
 

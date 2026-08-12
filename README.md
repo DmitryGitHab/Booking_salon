@@ -1,49 +1,36 @@
 # Booking API — сервис бронирования (запись в салон красоты)
 
-## Статус: Этап 3 оплата через Stripe
+## Статус: Этап 4 из 5 — фоновые задачи (Celery) и уведомления
 
-Что добавилось на этапе 3 (поверх этапов 1-2):
-- `PaymentGateway` — Protocol-порт в `application/interfaces.py`, реализация `StripeGateway`
-  в `infrastructure/payments/stripe_gateway.py` (единственное место, знающее про stripe-python).
-- `InitiatePaymentUseCase` — создаёт Stripe PaymentIntent для брони. Сетевой вызов к Stripe
-  вынесен из транзакции БД (короткая транзакция проверки → HTTP к Stripe → короткая транзакция
-  сохранения результата), чтобы не держать открытую транзакцию на время сетевого ожидания.
-- **Retry с лимитом попыток**: клиент может повторно дёрнуть `POST /api/bookings/{id}/pay`
-  после неуспешной оплаты — пересоздаётся новый PaymentIntent. Лимит — `PAYMENT_RETRY_ATTEMPTS`
-  (по умолчанию 3). При исчерпании лимита бронь автоматически переходит в `expired`, слот
-  освобождается — это происходит в обработчике webhook `payment_intent.payment_failed`.
-- `HandlePaymentWebhookUseCase` — обрабатывает `payment_intent.succeeded` (подтверждает бронь)
-  и `payment_intent.payment_failed` (либо разрешает retry, либо аннулирует бронь при исчерпании
-  лимита). Подпись webhook-запроса проверяется в роуте через `stripe.Webhook.construct_event`.
-- **Возврат при отмене**: `CancelBookingUseCase` теперь принимает `PaymentGateway`. Если бронь
-  была оплачена (`status == confirmed`), при отмене оформляется 100%-й возврат через Stripe.
-- Роуты: `POST /api/bookings/{id}/pay`, `POST /api/webhooks/stripe`.
-- `tests/test_payment_flow.py` — тесты на `FakePaymentGateway` (без реального Stripe и без
-  настоящих ключей): успешная оплата → подтверждение, retry-лимит → автоотмена + освобождение
-  слота, отмена оплаченной брони → возврат, отмена неоплаченной — без возврата.
+Что добавилось на этапе 4 (поверх этапов 1-3):
+- **Celery + Redis** как брокер задач (`app/workers/celery_app.py`, `app/workers/tasks.py`).
+- **Проактивная автоотмена**: периодическая задача `bookings.expire_stale` (Celery beat, раз
+  в минуту) находит брони в статусе `pending_payment` с истёкшим `expires_at` и аннулирует их,
+  освобождая слот. Это дополняет уже существовавшую *реактивную* отмену (по факту неуспешного
+  Stripe-webhook) — теперь бронь гарантированно "протухнет", даже если клиент просто закрыл
+  вкладку и Stripe вообще ничего не прислал.
+- **Уведомления** (лог + SMS-заглушка) на 4 события: бронь создана, оплата прошла, бронь
+  отменена клиентом, бронь автоматически аннулирована. Архитектурно это `NotificationDispatcher`
+  — Protocol-порт в `application/interfaces.py`; use case-ы вызывают `dispatch_sms(...)`, которая
+  синхронно публикует Celery-задачу в Redis и сразу возвращает управление (сама отправка — уже
+  в воркере, `app/workers/tasks.py:send_sms_task` → `LoggingSmsGateway`, которая просто логирует
+  и печатает в консоль — реальный провайдер типа Twilio/SMS.ru подключается заменой одного файла).
+- Небольшой рефакторинг: добавлен `UserRepository`/`ClientContact` в UoW — понадобился, чтобы
+  use case-ы могли получить телефон клиента для SMS, не выходя за пределы своих Protocol-портов.
 
-## Как это работать с настоящими ключами Stripe
-Если у вас появятся свои test-ключи Stripe — просто подставьте их в `.env`:
-```
-STRIPE_SECRET_KEY=sk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-```
-`STRIPE_WEBHOOK_SECRET` можно получить, слушая события через Stripe CLI:
-```bash
-stripe listen --forward-to localhost:8000/api/webhooks/stripe
-```
-Команда выведет `whsec_...` для локальной разработки. Дальше можно реально дёргать
-`POST /api/bookings/{id}/pay`, получать `client_secret` и подтверждать оплату тестовой картой
-Stripe (`4242 4242 4242 4242`) через Stripe.js на фронтенде (появится на этапе 5) — или
-искусственно триггерить событие через `stripe trigger payment_intent.succeeded`.
+## Важный нюанс реализации (годится как тема для собеседования)
+Celery-воркер — синхронный процесс, а наш стек полностью `async`. Периодическая задача
+`expire_stale_bookings_task` оборачивает async-код в `asyncio.run(...)`, и **каждый вызов
+таски создаёт новый event loop**. `asyncpg`-соединения жёстко привязаны к тому loop'у, в
+котором были созданы, поэтому переиспользовать глобальный пул соединений (как это делает
+FastAPI-процесс) между вызовами таски **нельзя** — поймаем `RuntimeError: ... attached to a
+different loop`. Решение — в `app/workers/tasks.py`: на каждый вызов таски создаётся свежий
+`AsyncEngine` с `NullPool` (без переиспользования соединений) и он же корректно `dispose()`-ится
+по завершении.
 
-Без ключей (`sk_test_dummy`) реальные вызовы к Stripe будут падать с ошибкой авторизации —
-это ожидаемо, для разработки и тестов используется `FakePaymentGateway` (см. `tests/test_payment_flow.py`).
-
-## Что дальше 
-Фоновые задачи (Celery/ARQ): автоотмена неоплаченной брони по `expires_at` таймером (сейчас
-   это происходит только реактивно — по факту неуспешного webhook, а не по таймауту), лог + SMS-заглушка.
-Docker Compose end-to-end, CI (GitHub Actions), vanilla JS фронтенд, README с диаграммой.
+## Что дальше (этап 5)
+Docker Compose end-to-end (уже добавлены сервисы `worker`/`beat`, см. ниже), CI (GitHub Actions),
+vanilla JS фронтенд, README с диаграммой архитектуры и метриками нагрузочного теста.
 
 ## Запуск локально (без Docker)
 
@@ -52,36 +39,65 @@ python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-cp .env.example .env             # по умолчанию SQLite, BOOKING_LOCK_STRATEGY=db, Stripe dummy-ключи
+cp .env.example .env
 
 alembic upgrade head
-uvicorn app.main:app --reload
 ```
 
-Swagger UI: http://localhost:8000/docs
+Нужно поднять локальный Redis (для Celery-брокера и, если используете, для `BOOKING_LOCK_STRATEGY=redis`):
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+```
+
+Дальше — 3 отдельных процесса в 3 терминалах:
+```bash
+# Терминал 1: сам API
+uvicorn app.main:app --reload
+
+# Терминал 2: воркер, реально выполняющий задачи
+celery -A app.workers.celery_app worker --loglevel=info
+
+# Терминал 3: планировщик периодических задач (раз в минуту гоняет автоотмену)
+celery -A app.workers.celery_app beat --loglevel=info
+```
+
+Swagger UI: http://localhost:8000/docs. Когда придёт время автоотмены — в терминале воркера
+увидите лог вида `[SMS-заглушка] -> +7999...: Время на оплату брони истекло — бронь отменена.`
 
 ## Запуск тестов
 
 ```bash
-# Быстрые тесты (SQLite, секунды, без Docker, без реального Stripe)
-pytest tests/test_auth_and_catalog.py tests/test_booking_flow.py tests/test_payment_flow.py -v
+# Быстрые тесты (SQLite, секунды, без Docker, без реального Redis/Stripe)
+pytest tests/test_auth_and_catalog.py tests/test_booking_flow.py tests/test_payment_flow.py tests/test_booking_maintenance.py -v
 
-# Главный тест на конкурентность (нужен запущенный Docker — поднимет Postgres+Redis сам)
+# Главный тест на конкурентность (нужен запущенный Docker)
 pytest tests/test_concurrency.py -v -s
 ```
 
-## Запуск через Docker (Postgres + Redis)
+Все быстрые тесты подменяют `NotificationDispatcher` на fake (`tests/conftest.py:FakeNotificationDispatcher`)
+через `app.dependency_overrides` — реальный `CeleryNotificationDispatcher` полез бы в Redis,
+которого в тестовом окружении нет.
+
+## Запуск через Docker (Postgres + Redis + API + worker + beat)
 
 ```bash
 docker compose up --build
 ```
 
-Чтобы попробовать стратегию `redis` вместо `db` — добавьте в `docker-compose.yml` в секцию
-`app.environment`:
-```yaml
-BOOKING_LOCK_STRATEGY: redis
-REDIS_URL: redis://redis:6379/0
+Теперь поднимаются 5 сервисов: `db`, `redis`, `app`, `worker`, `beat`.
+
+## Как создать первого админа
+
+Публичная регистрация (`/api/auth/register`) может создать только роль `client` — так и
+задумано (мастеров заводит бизнес, а не кто угодно с улицы). Первого админа создаём CLI-скриптом:
+
+```bash
+python -m scripts.create_admin --email admin@example.com --password adminpass123 --full-name "Admin"
 ```
+
+Скрипт пишет прямо в ту БД, что указана в `DATABASE_URL` вашего `.env` — тот же файл/база,
+к которой обращается `uvicorn`. Дальше логинитесь под этим email/паролем через `/api/auth/login`
+и создаёте мастеров через `POST /api/admin/masters` с полученным токеном.
 
 ## Как пользоваться Swagger UI (`/docs`)
 
@@ -96,9 +112,9 @@ REDIS_URL: redis://redis:6379/0
 4. Теперь все защищённые эндпоинты (замочек закрылся 🔒) будут автоматически слать
    `Authorization: Bearer <ваш токен>`.
 
-Если раньше видели форму с полями username/password/client_id — это была старая
-OAuth2-схема (уже исправлено): наш `/api/auth/login` всегда принимает JSON `{"email", "password"}`,
-а не form-data с полем `username`, поэтому та форма и не могла сработать (422).
+Авторизация сделана через `HTTPBearer` (не `OAuth2PasswordBearer`) специально: наш
+`/api/auth/login` принимает JSON `{"email", "password"}`, а не form-data с полем `username`,
+поэтому стандартная OAuth2-форма логина в Swagger всё равно не подошла бы под нашу схему.
 
 ## Проверка вручную через curl
 
@@ -158,28 +174,34 @@ curl -X POST http://localhost:8000/api/bookings/<booking_id>/pay \
 
 ```
 app/
-  domain/            # сущности и бизнес-правила (Booking, Slot, Service, Payment) — без фреймворков
+  domain/            # сущности и бизнес-правила — без фреймворков
   application/
-    interfaces.py     # Protocol-ы: репозитории, UnitOfWork, DistributedLock, PaymentGateway
-    booking.py         # CreateBookingUseCase, CancelBookingUseCase (+ возврат)
-    payment.py          # InitiatePaymentUseCase, HandlePaymentWebhookUseCase
+    interfaces.py     # Protocol-ы: репозитории, UnitOfWork, DistributedLock, PaymentGateway,
+                        # NotificationDispatcher, ClientContact/UserRepository
+    booking.py         # CreateBookingUseCase, CancelBookingUseCase (+ уведомления, возврат)
+    payment.py          # InitiatePaymentUseCase, HandlePaymentWebhookUseCase (+ уведомления)
+    booking_maintenance.py  # ExpireStaleBookingsUseCase — периодическая автоотмена
   infrastructure/
     db/               # SQLAlchemy engine, ORM-модели
     repositories/      # SqlAlchemyUnitOfWork + мапперы domain <-> ORM
     locks/             # NullLock (db-стратегия) и RedisLock (redis-стратегия)
-    payments/           # StripeGateway — единственное место со stripe-python
+    payments/           # StripeGateway
+    notifications/      # LoggingSmsGateway (заглушка) + CeleryNotificationDispatcher
+  workers/
+    celery_app.py      # конфиг Celery + beat_schedule
+    tasks.py            # send_sms_task, expire_stale_bookings_task
   api/
     routes/           # FastAPI-роуты (auth, masters, bookings, webhooks)
     schemas/           # Pydantic-схемы запросов/ответов
     deps.py            # зависимости: текущий юзер, роли, фабрики use case-ов
   core/               # конфиг, security (JWT, хеширование паролей)
-  workers/            # фоновые задачи (появятся на этапе 4)
 scripts/
   create_admin.py     # CLI для создания первого админа
 alembic/              # миграции
 tests/
-  test_auth_and_catalog.py  # этап 1
-  test_booking_flow.py      # этап 2, быстрые
-  test_payment_flow.py      # этап 3, быстрые, FakePaymentGateway
-  test_concurrency.py       # этап 2, главный тест, нужен Docker
+  test_auth_and_catalog.py     # этап 1
+  test_booking_flow.py         # этап 2, быстрые
+  test_payment_flow.py         # этап 3, быстрые, FakePaymentGateway
+  test_booking_maintenance.py  # этап 4, быстрые, автоотмена + уведомления
+  test_concurrency.py          # этап 2, главный тест, нужен Docker
 ```
