@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbSession, require_roles
 from app.api.schemas.catalog import (
+    MasterBookingResponse,
     MasterProfileResponse,
     ServiceCreateRequest,
     ServiceResponse,
@@ -15,7 +16,7 @@ from app.api.schemas.catalog import (
 )
 from app.core.security import hash_password
 from app.domain.enums import SlotStatus, UserRole
-from app.infrastructure.db.models import MasterProfile, Service, Slot, User
+from app.infrastructure.db.models import Booking, MasterProfile, Service, Slot, User
 
 router = APIRouter(tags=["masters"])
 
@@ -103,6 +104,60 @@ async def list_masters(db: DbSession):
     )
     masters = result.scalars().all()
     return [_to_master_response(m) for m in masters]
+
+
+@router.get("/api/masters/me/bookings", response_model=list[MasterBookingResponse])
+async def list_my_master_bookings(db: DbSession, current_user: CurrentUser):
+    """Записи клиентов к текущему мастеру — имя, телефон, услуга, время, статус."""
+    if current_user.role != UserRole.MASTER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только мастерам")
+
+    profile_result = await db.execute(select(MasterProfile).where(MasterProfile.user_id == current_user.id))
+    profile = profile_result.scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Профиль мастера не найден")
+
+    query = (
+        select(Booking, Slot, Service, User)
+        .join(Slot, Booking.slot_id == Slot.id)
+        .join(Service, Booking.service_id == Service.id)
+        .join(User, Booking.client_id == User.id)
+        .where(Slot.master_id == profile.id)
+        .order_by(Slot.start_time)
+    )
+    rows = (await db.execute(query)).all()
+
+    return [
+        MasterBookingResponse(
+            id=booking.id,
+            status=booking.status.value,
+            price_at_booking=booking.price_at_booking,
+            slot_start=slot.start_time,
+            slot_end=slot.end_time,
+            service_name=service.name,
+            client_full_name=client.full_name,
+            client_phone=client.phone,
+        )
+        for booking, slot, service, client in rows
+    ]
+
+
+@router.get("/api/masters/me", response_model=MasterProfileResponse)
+async def get_my_master_profile(db: DbSession, current_user: CurrentUser):
+    """Возвращает профиль мастера текущего пользователя — нужно фронтенду,
+    чтобы мастер мог добавлять свои услуги/слоты, не зная свой master_id заранее."""
+    if current_user.role != UserRole.MASTER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только мастерам")
+
+    result = await db.execute(
+        select(MasterProfile)
+        .options(selectinload(MasterProfile.services), selectinload(MasterProfile.user))
+        .where(MasterProfile.user_id == current_user.id)
+    )
+    master = result.scalar_one_or_none()
+    if master is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Профиль мастера не найден")
+    return _to_master_response(master)
 
 
 @router.get("/api/masters/{master_id}", response_model=MasterProfileResponse)

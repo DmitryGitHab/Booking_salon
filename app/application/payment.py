@@ -109,6 +109,14 @@ class HandlePaymentWebhookUseCase:
                 booking.confirm()
                 await uow.bookings.update_status(booking.id, booking.status)
 
+                # БАГ, который здесь был: слот оставался в статусе pending_payment
+                # навсегда, даже после успешной оплаты — из-за этого в панели
+                # мастера нельзя было отличить "ждём оплату" от "оплачено".
+                slot = await uow.slots.get_by_id(booking.slot_id)
+                if slot is not None:
+                    slot.mark_booked()
+                    await uow.slots.save(slot)
+
             await uow.commit()
 
             contact = await uow.users.get_contact(booking.client_id) if booking is not None else None

@@ -2,11 +2,121 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Booking API</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Booking — запись в салон красоты</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <h1>Booking API</h1>
-  <p>Backend готов. UI появится на отдельном этапе разработки.</p>
-  <p>Документация: <a href="/docs">/docs</a></p>
+  <div class="page">
+    <header class="masthead">
+      <div class="masthead-mark">
+        <div class="logo-badge">B</div>
+        <div>
+          <h1>Booking</h1>
+          <p class="masthead-sub">Запись в салон красоты</p>
+        </div>
+      </div>
+      <div id="session-box" class="session-box hidden">
+        <span id="session-role" class="pill"></span>
+        <span id="session-name" class="session-name"></span>
+        <button id="logout-btn" class="link-btn">Выйти</button>
+      </div>
+    </header>
+
+    <nav id="tabs" class="tabs hidden">
+      <button class="tab-btn" data-view="browse">Мастера и слоты</button>
+      <button class="tab-btn" data-view="bookings" data-roles="client">Мои брони</button>
+      <button class="tab-btn" data-view="master-panel" data-roles="master">Моя панель</button>
+      <button class="tab-btn" data-view="admin-panel" data-roles="admin">Админ-панель</button>
+    </nav>
+
+    <main id="app">
+      <!-- Экран авторизации -->
+      <section id="view-auth" class="view">
+        <div class="auth-card">
+          <div class="auth-switch">
+            <button id="show-login" class="auth-switch-btn active">Вход</button>
+            <button id="show-register" class="auth-switch-btn">Регистрация</button>
+          </div>
+
+          <form id="login-form" class="stack">
+            <label>Email
+              <input type="email" name="email" required autocomplete="username" />
+            </label>
+            <label>Пароль
+              <input type="password" name="password" required autocomplete="current-password" />
+            </label>
+            <button type="submit" class="btn-primary btn-block">Войти</button>
+          </form>
+
+          <form id="register-form" class="stack hidden">
+            <label>Имя
+              <input type="text" name="full_name" required />
+            </label>
+            <label>Email
+              <input type="email" name="email" required autocomplete="username" />
+            </label>
+            <label>Телефон <span class="hint">для SMS-уведомлений</span>
+              <input type="tel" name="phone" placeholder="+7 999 000-00-00" />
+            </label>
+            <label>Пароль <span class="hint">минимум 8 символов</span>
+              <input type="password" name="password" required minlength="8" autocomplete="new-password" />
+            </label>
+            <button type="submit" class="btn-primary btn-block">Зарегистрироваться</button>
+          </form>
+
+          <p class="auth-note">
+            Регистрация создаёт клиентский аккаунт. Мастеров и админов заводят отдельно — см. README.
+          </p>
+        </div>
+      </section>
+
+      <!-- Экран списка мастеров и слотов -->
+      <section id="view-browse" class="view hidden">
+        <div class="view-header">
+          <h2>Мастера и слоты</h2>
+          <p class="view-sub">Выберите мастера, услугу и время — бронь резервируется сразу</p>
+        </div>
+        <div id="masters-list" class="cards"></div>
+      </section>
+
+      <!-- Экран "мои брони" -->
+      <section id="view-bookings" class="view hidden">
+        <div class="view-header">
+          <h2>Мои брони</h2>
+          <p class="view-sub">Оплата и отмена — прямо здесь</p>
+        </div>
+        <div id="bookings-list" class="cards"></div>
+      </section>
+
+      <!-- Панель мастера: свои услуги и слоты -->
+      <section id="view-master-panel" class="view hidden">
+        <div class="view-header">
+          <h2>Моя панель</h2>
+          <p class="view-sub">Добавляйте услуги и открывайте слоты для записи клиентов</p>
+        </div>
+        <div id="master-panel-content" class="cards"></div>
+      </section>
+
+      <!-- Панель админа: создание мастеров -->
+      <section id="view-admin-panel" class="view hidden">
+        <div class="view-header">
+          <h2>Админ-панель</h2>
+          <p class="view-sub">Заводите аккаунты мастеров — без Swagger</p>
+        </div>
+        <div id="admin-panel-content" class="cards"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>

@@ -58,3 +58,16 @@ class SlotResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MasterBookingResponse(BaseModel):
+    """Запись клиента к мастеру — то, что видит сам мастер в своей панели."""
+
+    id: UUID
+    status: str
+    price_at_booking: Decimal
+    slot_start: datetime
+    slot_end: datetime
+    service_name: str
+    client_full_name: str
+    client_phone: str | None

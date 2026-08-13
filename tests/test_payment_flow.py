@@ -112,7 +112,7 @@ def _webhook_body(event_type: str, intent_id: str) -> dict:
 
 
 async def test_payment_success_confirms_booking(client: AsyncClient, db_session, fake_payment_gateway):
-    client_token, booking, _ = await _setup_booking(client, db_session)
+    client_token, booking, master_id = await _setup_booking(client, db_session)
 
     pay_resp = await client.post(
         f"/api/bookings/{booking['id']}/pay", headers={"Authorization": f"Bearer {client_token}"}
@@ -132,6 +132,14 @@ async def test_payment_success_confirms_booking(client: AsyncClient, db_session,
         await client.get("/api/bookings/me", headers={"Authorization": f"Bearer {client_token}"})
     ).json()
     assert bookings[0]["status"] == "confirmed"
+
+    # Слот должен перейти в booked (не оставаться в pending_payment навсегда) —
+    # иначе панель мастера не может отличить "ждём оплату" от "уже оплачено".
+    all_slots = (
+        await client.get(f"/api/masters/{master_id}/slots?only_free=false")
+    ).json()
+    booked_slot = next(s for s in all_slots if s["id"] == booking["slot_id"])
+    assert booked_slot["status"] == "booked"
 
 
 async def test_payment_retry_limit_expires_booking_and_frees_slot(

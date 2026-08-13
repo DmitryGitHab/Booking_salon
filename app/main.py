@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import auth, bookings, masters, webhooks
@@ -34,8 +34,13 @@ app.include_router(masters.router)
 app.include_router(bookings.router)
 app.include_router(webhooks.router)
 
-# Отдаём простой vanilla-JS фронтенд из /static (появится на следующем этапе)
+# Отдаём vanilla-JS фронтенд: index.html с корня, остальные файлы (app.js, style.css) из /static
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def frontend_index():
+    return FileResponse("static/index.html")
 
 
 # ---------------------------------------------------------------------------

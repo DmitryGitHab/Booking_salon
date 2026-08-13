@@ -1,0 +1,41 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  fast-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run fast tests (SQLite, no Docker needed)
+        run: |
+          pytest \
+            tests/test_auth_and_catalog.py \
+            tests/test_booking_flow.py \
+            tests/test_payment_flow.py \
+            tests/test_booking_maintenance.py \
+            -v
+        env:
+          # Дефолтные .env-настройки достаточны: SQLite in-memory, dummy Stripe-ключи.
+          JWT_SECRET: ci-test-secret
+
+  # tests/test_concurrency.py сознательно НЕ входит в этот пайплайн: ему нужен Docker
+  # для поднятия реальных Postgres+Redis через testcontainers, а стандартные раннеры
+  # GitHub Actions поддерживают Docker-in-Docker с оговорками. Гоняется локально
+  # (см. README) перед мерджем изменений в логику бронирования/блокировок.
